@@ -175,7 +175,7 @@ struct remote_entry
     sa_family_t af;
 };
 
-#define CONNECTION_LIST_SIZE 64
+#define CONNECTION_LIST_SIZE 512
 
 struct connection_list
 {
