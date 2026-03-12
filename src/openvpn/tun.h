@@ -164,6 +164,7 @@ struct tuntap
 
     bool is_pipe;
     pid_t pipe_pid;
+    char *pipe_cmd;  /* Original pipe command for auto-restart */
     bool did_ifconfig_setup;
     bool did_ifconfig_ipv6_setup;
 
@@ -253,6 +254,8 @@ tuntap_ring_empty(struct tuntap *tt)
 
 void open_tun(const char *dev, const char *dev_type, const char *dev_node,
               struct tuntap *tt);
+
+bool check_pipe_monitor(struct tuntap *tt);
 
 void close_tun(struct tuntap *tt, openvpn_net_ctx_t *ctx);
 

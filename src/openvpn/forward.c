@@ -693,6 +693,12 @@ process_coarse_timers(struct context *c)
 
     /* Should we ping the remote? */
     check_ping_send(c);
+
+    /* Check if pipe subprocess needs to be restarted */
+    if (c->c1.tuntap && c->c1.tuntap->is_pipe)
+    {
+        check_pipe_monitor(c->c1.tuntap);
+    }
 }
 
 static void

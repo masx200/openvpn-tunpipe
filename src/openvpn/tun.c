@@ -1695,8 +1695,85 @@ open_pipe (const char *dev, struct tuntap *tt)
         msg(M_FATAL, "ERROR: unable to start subprocess");
     }
     tt->pipe_pid = (pid_t)pid;
+    /* Save the original pipe command for auto-restart */
+    tt->pipe_cmd = string_alloc(dev, NULL);
 }
 
+/*
+ * Check if the pipe subprocess is still running and restart it if needed.
+ * Returns true if the process was restarted, false otherwise.
+ */
+bool
+check_pipe_monitor(struct tuntap *tt)
+{
+    int status;
+    pid_t ret;
+
+    if (!tt || !tt->is_pipe || tt->pipe_pid <= 0)
+    {
+        return false;
+    }
+
+    /* Check if child process has exited */
+    ret = waitpid(tt->pipe_pid, &status, WNOHANG);
+
+    if (ret == 0)
+    {
+        /* Child still running */
+        return false;
+    }
+    else if (ret == tt->pipe_pid)
+    {
+        /* Child exited - restart it */
+        msg(M_INFO, "Pipe subprocess (PID %d) exited, restarting...",
+            tt->pipe_pid);
+
+        struct argv argv;
+        struct env_set *es;
+        int fds[2], pid;
+
+        if (socketpair(AF_UNIX, SOCK_DGRAM, 0, fds) == -1)
+        {
+            msg(M_ERR | M_ERRNO, "ERROR: socketpair call failed during restart");
+            return false;
+        }
+
+        /* Close old fd and replace with new one */
+        if (tt->fd >= 0)
+        {
+            close(tt->fd);
+        }
+        tt->fd = fds[0];
+        set_nonblock(tt->fd);
+        set_cloexec(tt->fd);
+
+        es = env_set_create(NULL);
+        setenv_int(es, "VPNFD", fds[1]);
+        set_vpnc_vars(es, tt);
+
+        argv = argv_new();
+        /* pipe_cmd looks like: "|/path/to/program <args...>" */
+        argv_printf(&argv, "/bin/sh -c %s", &tt->pipe_cmd[1]);
+        pid = openvpn_execve_check(&argv, es, M_ERR | S_SCRIPT | S_NOWAIT | S_SETPGRP,
+                                   "ERROR: Unable to execute TUN script during restart");
+        argv_free(&argv);
+        env_set_destroy(es);
+        close(fds[1]);
+
+        if (pid <= 0)
+        {
+            msg(M_ERR, "ERROR: unable to restart subprocess");
+            return false;
+        }
+
+        tt->pipe_pid = (pid_t)pid;
+        msg(M_INFO, "Pipe subprocess restarted with new PID %d", tt->pipe_pid);
+        return true;
+    }
+
+    /* Error or other case */
+    return false;
+}
 
 
 #if defined (TARGET_OPENBSD) || (defined(TARGET_DARWIN) && HAVE_NET_IF_UTUN_H)
@@ -1918,6 +1995,10 @@ close_tun_generic(struct tuntap *tt)
     }
 
     free(tt->actual_name);
+    if (tt->pipe_cmd)
+    {
+        free(tt->pipe_cmd);
+    }
     if (tt->pipe_pid)
     {
         kill (-tt->pipe_pid, SIGHUP);
@@ -2615,6 +2696,11 @@ close_tun(struct tuntap *tt, openvpn_net_ctx_t *ctx)
     solaris_close_tun(tt);
 
     free(tt->actual_name);
+
+    if (tt->pipe_cmd)
+    {
+        free(tt->pipe_cmd);
+    }
 
     if (tt->pipe_pid)
     {
@@ -6822,6 +6908,10 @@ close_tun(struct tuntap *tt, openvpn_net_ctx_t *ctx)
     if (tt->pipe_pid)
     {
         kill (-tt->pipe_pid, SIGHUP);
+        if (tt->pipe_cmd)
+        {
+            free(tt->pipe_cmd);
+        }
         return;
     }
 
